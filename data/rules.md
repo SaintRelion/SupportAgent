@@ -1,5 +1,6 @@
 ### Company Overview
 We are SES (Spartan Energy Services), a licensed contractor working with utility companies on their Net Metering program. We are one of several companies operating under this program — this is the utility company's program, not exclusively ours. We help homeowners go solar by scheduling in-home consultations (appointments) with a closer who will assess the home and present financing options.
+
 ### Utility Companies We Service
 - MI — Michigan — Consumers Energy / DTE Energy 
 - IL — Illinois — Ameren / COMED
@@ -54,5 +55,6 @@ Ask: "Would you say it's likely above or below 670?"
 ### What we Offer
 We currently only offer solar programs. We do not sell or service anything else.
 
-### What we Offer
-We currently only offer solar programs. We do not sell or service anything else.
+### Conversation Memory
+- If an agent asks whether you remember a past conversation, respond: "I clear our conversation once you are satisfied with an answer." Do not imply we retain full chat history indefinitely.
+- Standing company policy always lives here in rules.md. Anything learned from past conversations is supplementary and may reflect one-off exceptions an admin approved for a specific case — not automatically standing policy. If those two ever conflict, it gets escalated to an admin rather than guessed at.

@@ -273,17 +273,49 @@ def db_delete_entry(entry_id: int):
         conn.commit()
 
 
+# ── Checkpointer cleanup (LangGraph Postgres tables) ──────────────────────────
+#
+# AsyncPostgresSaver persists graph state in three tables, all keyed by
+# thread_id: checkpoints, checkpoint_writes, checkpoint_blobs.
+# This deletes rows for ONE thread_id only — never a blanket wipe.
+
+def db_clear_thread_checkpoints(thread_id: str) -> dict:
+    """
+    Delete all checkpoint rows for a single thread_id from
+    checkpoints, checkpoint_writes, checkpoint_blobs.
+    Returns a dict of rows deleted per table, for logging.
+    Safe no-op if thread_id has no rows.
+    """
+    deleted = {}
+    with psycopg.connect(POSTGRES_URL) as conn:
+        for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+            cur = conn.execute(
+                f"DELETE FROM {table} WHERE thread_id = %s",
+                (thread_id,),
+            )
+            deleted[table] = cur.rowcount
+        conn.commit()
+    return deleted
+
+
 # ── Combined load for agent ───────────────────────────────────────────────────
 
 def load_rules_section() -> str:
     rules = load_rules().strip()
     if not rules:
         return ""
-    return f"## Company Rules\n{rules}"
+    return (
+        "## OFFICIAL COMPANY RULES (rules.md — source of truth, admin-maintained)\n"
+        f"{rules}"
+    )
 
 
 def format_entries(entries: list[dict]) -> str:
     if not entries:
         return ""
     parts = [f"### {e['topic']}\n{e['summary']}" for e in entries]
-    return "## Relevant Q&A Knowledge\n\n" + "\n\n".join(parts)
+    return (
+        "## LEARNED FROM PAST CONVERSATIONS (extracted from prior admin answers — "
+        "may reflect one-off exceptions or case-by-case calls an admin made, "
+        "not necessarily standing policy)\n\n" + "\n\n".join(parts)
+    )

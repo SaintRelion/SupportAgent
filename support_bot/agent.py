@@ -21,6 +21,7 @@ from support_bot.rules import (
     format_entries,
     db_fetch_all_with_embeddings,
     load_rules_section,
+    db_clear_thread_checkpoints,
 )
 from shared.embeddings import embed_text_sync, rank_entries_by_similarity
 
@@ -49,7 +50,7 @@ def _fetch_relevant_entries(question: str) -> tuple[list[tuple[float, dict]], li
     try:
         query_vector = embed_text_sync(question)
         all_entries = db_fetch_all_with_embeddings()
-        results = rank_entries_by_similarity(query_vector, all_entries, top_k=5, min_score=0.60)
+        results = rank_entries_by_similarity(query_vector, all_entries, top_k=4, min_score=0.62)
         matched = [(s, e) for s, e, passed in results if passed]
         top3 = [(s, e) for s, e, _ in results]
         log.info("[EMBED] question embedded | total_entries=%d | matched=%d", len(all_entries), len(matched))
@@ -132,7 +133,12 @@ Your job:
 3. Answer based ONLY on what the rules say. Do not guess or use outside knowledge.
    The knowledge entries returned may include loosely related topics — use your judgment to focus only on what is clearly relevant to the question. Ignore entries that don't apply.
 4. If the rules don't have enough information to answer, call `escalate_to_admin` so a manager can clarify and the knowledge base can be updated.
-5. Be direct and concise — agents are on calls and need fast answers.
+5. `query_rules` returns two distinct sources — treat them differently:
+   - **OFFICIAL COMPANY RULES (rules.md)** — standing policy, source of truth.
+   - **LEARNED FROM PAST CONVERSATIONS** — extracted from things an admin said in prior chats. These may be one-off, case-by-case exceptions an admin approved for a specific situation, not necessarily standing policy.
+   If the two AGREE or the learned entry simply adds detail without contradicting rules.md, use both normally.
+   If a learned entry CONTRADICTS or appears to bypass what rules.md says (e.g. rules.md sets a hard minimum and a learned entry describes an exception that isn't documented in rules.md as a standing exception), do NOT silently pick one. Call `escalate_to_admin` — same as you would for a missing-information case — so an admin can confirm whether that exception is still standing policy. Briefly note the conflict in your reason.
+6. Be direct and concise — agents are on calls and need fast answers.
    - Max 3-4 lines per response.
    - No bullet lists unless absolutely necessary.
    - Lead with the answer, not the explanation.
@@ -161,9 +167,9 @@ Never use your own knowledge — only use what `query_rules` returns."""
 def answer_node(state: AgentState) -> dict:
     log.info("[NODE] answer_node triggered")
 
-    llm = get_llm(model_override="deepseek/deepseek-v4-flash").bind_tools(TOOLS)
+    llm = get_llm().bind_tools(TOOLS)
 
-    recent_messages = state["messages"][-30:]
+    recent_messages = state["messages"][-20:]
     while recent_messages and isinstance(recent_messages[0], ToolMessage):
         recent_messages = recent_messages[1:]
 
@@ -305,6 +311,70 @@ async def close_checkpointer():
     global _checkpointer
     if _checkpointer and hasattr(_checkpointer, "conn"):
         await _checkpointer.conn.close()
+
+
+# ── Satisfaction classification + checkpoint cleanup ────────────────────────────
+
+async def check_should_clear(thread_id: str, new_message: str) -> bool:
+    """
+    Pulls the last ~10 messages from the thread's checkpoint state, appends the
+    new incoming message, and asks the LLM whether this looks like a concluded
+    exchange (satisfaction expressed, or a clean topic switch with no pending
+    follow-up). Called BEFORE run_agent so a stale thread can be cleared first.
+    Conservative — defaults to False (keep history) on any doubt or error.
+    """
+    if not new_message or not new_message.strip():
+        return False
+    try:
+        graph = await get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        state = await graph.aget_state(config)
+        if not state or not state.values.get("messages"):
+            return False  # nothing to clear
+
+        recent = state.values["messages"][-10:]
+        transcript_lines = []
+        for m in recent:
+            role = "USER" if isinstance(m, HumanMessage) else ("AGENT" if isinstance(m, AIMessage) else None)
+            if role and isinstance(m.content, str) and m.content and m.content != "==queued==":
+                transcript_lines.append(f"{role}: {m.content[:200]}")
+        transcript_lines.append(f"USER (new): {new_message[:200]}")
+        transcript = "\n".join(transcript_lines)
+
+        llm = get_llm(model_override="deepseek/deepseek-v4-flash", temperature=0)
+        classify_prompt = (
+            "Reply with exactly one word: YES or NO. No punctuation, no explanation.\n\n"
+            "Below is a recent conversation thread ending with a NEW user message. "
+            "Should the thread be considered DONE and cleared? Answer YES if:\n"
+            "- The new message expresses satisfaction (thanks, got it, noted, copy, all good)\n"
+            "- OR the previous exchange was clearly answered AND the new message is an "
+            "unrelated topic switch with no pending follow-up\n"
+            "Answer NO if the new message is a follow-up/continuation of the prior topic, "
+            "or if there is any doubt.\n\n"
+            f"{transcript}"
+        )
+        response = llm.invoke([
+            SystemMessage(content="You are a strict binary classifier. Reply with only YES or NO."),
+            HumanMessage(content=classify_prompt),
+        ])
+        answer = str(response.content).strip().upper()
+        should_clear = answer.startswith("YES")
+        log.info("[SATISFACTION] thread=%s → %s | new_msg=%r", thread_id, should_clear, new_message[:60])
+        return should_clear
+    except Exception as e:
+        log.warning("[SATISFACTION] check failed, defaulting to False: %s", e)
+        return False
+
+
+def clear_thread_history(thread_id: str) -> dict:
+    """
+    Wipe LangGraph checkpoint rows for ONE thread_id only.
+    Called after the user signals satisfaction, so the checkpoint DB doesn't
+    grow unbounded. Never touches other threads.
+    """
+    deleted = db_clear_thread_checkpoints(thread_id)
+    log.info("[CLEANUP] Cleared checkpoints for thread_id=%s | rows_deleted=%s", thread_id, deleted)
+    return deleted
 
 
 # ── Public entry point ────────────────────────────────────────────────────────

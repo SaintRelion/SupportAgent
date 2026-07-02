@@ -73,7 +73,7 @@ from shared.config import (
     KNOWLEDGE_LOG_CHANNEL_ID,
 )
 from shared.llm import get_llm
-from support_bot.agent import run_agent, close_checkpointer
+from support_bot.agent import run_agent, close_checkpointer, check_should_clear, clear_thread_history
 from support_bot.rules import append_rule, load_rules
 
 from analyzer.pipeline import analyze_recording
@@ -263,6 +263,18 @@ async def _handle_user_message_locked(message: discord.Message, all_messages: li
         return text
     messages_to_send = [_clean(m) for m in (all_messages or [message])]
     log.info("[SUPPORT] Sending %d message(s) to agent", len(messages_to_send))
+
+    # Check BEFORE answering: pull recent checkpoint state + new message, ask LLM
+    # if this looks concluded. If so, clear checkpoint now so the agent answers
+    # fresh instead of dragging stale context into the new topic.
+    if await check_should_clear(thread_id, messages_to_send[-1]):
+        try:
+            clear_thread_history(thread_id)
+            log.info("[SUPPORT] User %s concluded previous exchange — cleared thread_id=%s before answering", user_id, thread_id)
+        except Exception:
+            import traceback
+            log.error("[SUPPORT] Failed to clear checkpoints for thread_id=%s:\n%s", thread_id, traceback.format_exc())
+
     async with message.channel.typing():
         result = await run_agent(messages_to_send, thread_id)
 
@@ -371,7 +383,7 @@ async def import_history_cmd(interaction: discord.Interaction):
             updates.append(msg)
             log.info("[CMD] import_history: %s", msg)
 
-        await run_import(channel, ADMIN_USER_IDS, status_cb=status_cb, days_back=5)
+        await run_import(channel, ADMIN_USER_IDS, status_cb=status_cb, days_back=60)
         try:
             await interaction.followup.send(f"Import complete. Processed {len(updates)} days.", ephemeral=True)
         except Exception:

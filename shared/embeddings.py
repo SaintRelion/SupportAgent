@@ -27,7 +27,7 @@ async def embed_text(text: str) -> list[float]:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["data"][0]["embedding"]
+        return [float(x) for x in data["data"][0]["embedding"]]
 
 
 def embed_text_sync(text: str) -> list[float]:
@@ -45,7 +45,7 @@ def embed_text_sync(text: str) -> list[float]:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["data"][0]["embedding"]
+        return [float(x) for x in data["data"][0]["embedding"]]
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
