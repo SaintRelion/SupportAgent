@@ -332,13 +332,13 @@ async def check_should_clear(thread_id: str, new_message: str) -> bool:
         if not state or not state.values.get("messages"):
             return False  # nothing to clear
 
-        recent = state.values["messages"][-10:]
+        recent = state.values["messages"][-7:]
         transcript_lines = []
         for m in recent:
             role = "USER" if isinstance(m, HumanMessage) else ("AGENT" if isinstance(m, AIMessage) else None)
             if role and isinstance(m.content, str) and m.content and m.content != "==queued==":
-                transcript_lines.append(f"{role}: {m.content[:200]}")
-        transcript_lines.append(f"USER (new): {new_message[:200]}")
+                transcript_lines.append(f"{role}: {m.content[:100]}")
+        transcript_lines.append(f"USER (new): {new_message[:100]}")
         transcript = "\n".join(transcript_lines)
 
         llm = get_llm(model_override="deepseek/deepseek-v4-pro", temperature=0)
