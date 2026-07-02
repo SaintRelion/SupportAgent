@@ -219,7 +219,7 @@ async def extract_from_log(
     source_date: date,
     chunk_label: str = "",
 ) -> list[str]:
-    llm = get_llm(temperature=0.1)
+    llm = get_llm(temperature=0.1, reasoning_effort="medium")
 
     prompt = EXTRACTION_PROMPT.replace("LOG_PLACEHOLDER", log)
 

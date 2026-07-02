@@ -167,7 +167,7 @@ Never use your own knowledge — only use what `query_rules` returns."""
 def answer_node(state: AgentState) -> dict:
     log.info("[NODE] answer_node triggered")
 
-    llm = get_llm().bind_tools(TOOLS)
+    llm = get_llm(reasoning_effort="medium").bind_tools(TOOLS)
 
     recent_messages = state["messages"][-20:]
     while recent_messages and isinstance(recent_messages[0], ToolMessage):
@@ -341,16 +341,21 @@ async def check_should_clear(thread_id: str, new_message: str) -> bool:
         transcript_lines.append(f"USER (new): {new_message[:200]}")
         transcript = "\n".join(transcript_lines)
 
-        llm = get_llm(model_override="deepseek/deepseek-v4-flash", temperature=0)
+        llm = get_llm(model_override="deepseek/deepseek-v4-pro", temperature=0)
         classify_prompt = (
             "Reply with exactly one word: YES or NO. No punctuation, no explanation.\n\n"
-            "Below is a recent conversation thread ending with a NEW user message. "
-            "Should the thread be considered DONE and cleared? Answer YES if:\n"
-            "- The new message expresses satisfaction (thanks, got it, noted, copy, all good)\n"
-            "- OR the previous exchange was clearly answered AND the new message is an "
-            "unrelated topic switch with no pending follow-up\n"
-            "Answer NO if the new message is a follow-up/continuation of the prior topic, "
-            "or if there is any doubt.\n\n"
+            "Below is a recent conversation thread ending with a NEW user message.\n"
+            "Answer YES if EITHER is true:\n"
+            "1. The new message expresses satisfaction (thanks, got it, noted, copy, all good), OR\n"
+            "2. The new message is about a DIFFERENT subject than the prior thread — a new lead, "
+            "a new state, a new error, a different customer, a technical/system issue unrelated "
+            "to what was just discussed, etc.\n\n"
+            "Answer NO only if the new message is directly continuing, clarifying, or following up "
+            "on the SAME specific situation/question from the thread above.\n\n"
+            "Example — thread about qualifying a lead in Illinois, new message 'there is no internet' "
+            "→ YES (different subject, not a follow-up).\n"
+            "Example — thread about qualifying a lead in Illinois, new message 'what if the bill is $90' "
+            "→ NO (same situation, follow-up detail).\n\n"
             f"{transcript}"
         )
         response = llm.invoke([

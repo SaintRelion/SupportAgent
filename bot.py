@@ -264,18 +264,18 @@ async def _handle_user_message_locked(message: discord.Message, all_messages: li
     messages_to_send = [_clean(m) for m in (all_messages or [message])]
     log.info("[SUPPORT] Sending %d message(s) to agent", len(messages_to_send))
 
-    # Check BEFORE answering: pull recent checkpoint state + new message, ask LLM
-    # if this looks concluded. If so, clear checkpoint now so the agent answers
-    # fresh instead of dragging stale context into the new topic.
-    if await check_should_clear(thread_id, messages_to_send[-1]):
-        try:
-            clear_thread_history(thread_id)
-            log.info("[SUPPORT] User %s concluded previous exchange — cleared thread_id=%s before answering", user_id, thread_id)
-        except Exception:
-            import traceback
-            log.error("[SUPPORT] Failed to clear checkpoints for thread_id=%s:\n%s", thread_id, traceback.format_exc())
-
     async with message.channel.typing():
+        # Check BEFORE answering: pull recent checkpoint state + new message, ask LLM
+        # if this looks concluded. If so, clear checkpoint now so the agent answers
+        # fresh instead of dragging stale context into the new topic.
+        if await check_should_clear(thread_id, messages_to_send[-1]):
+            try:
+                clear_thread_history(thread_id)
+                log.info("[SUPPORT] User %s concluded previous exchange — cleared thread_id=%s before answering", user_id, thread_id)
+            except Exception:
+                import traceback
+                log.error("[SUPPORT] Failed to clear checkpoints for thread_id=%s:\n%s", thread_id, traceback.format_exc())
+
         result = await run_agent(messages_to_send, thread_id)
 
     reply                 = result["reply"]
@@ -438,8 +438,31 @@ async def on_ready_sync_commands():
 
 # ── Entry ──────────────────────────────────────────────────────────────────────
 
+async def _run_with_retry():
+    """
+    Retries bot.start() on connection failures (no internet, DNS issues, etc.)
+    so a temporary outage doesn't kill the process. Uses increasing backoff,
+    capped at 60s between attempts.
+    """
+    backoff = 5
+    max_backoff = 60
+    while True:
+        try:
+            await bot.start(DISCORD_BOT_TOKEN)
+            break  # bot.start() only returns on clean logout — exit loop
+        except (discord.errors.ConnectionClosed, discord.errors.GatewayNotFound,
+                OSError, discord.errors.HTTPException) as e:
+            log.error("[STARTUP] Connection failed: %s — retrying in %ss", e, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+        except Exception as e:
+            log.error("[STARTUP] Unexpected error: %s — retrying in %ss", e, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+
 if __name__ == "__main__":
     asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
     loop = asyncio.SelectorEventLoop(selectors.SelectSelector())
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(bot.start(DISCORD_BOT_TOKEN))
+    loop.run_until_complete(_run_with_retry())
